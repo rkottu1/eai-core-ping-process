@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:jms="http://www.mulesoft.org/schema/mule/jms" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd">
+    <asynchronous-processing-strategy name="Asynchronous_Processing_Strategy" maxThreads="1" minThreads="1" threadTTL="5000" doc:name="Asynchronous Processing Strategy"/>
+    <http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration"/>
+    <jms:activemq-connector name="Active_MQ" brokerURL="tcp://localhost:61616" validateConnections="true" doc:name="Active MQ" numberOfConsumers="1"/>
+    <flow name="edi_process_headers_Flow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/ediprocess-ForEach" allowedMethods="POST" doc:name="HTTPListner-ToGetInfo"/>
+        <logger message="*** EDIRequest_BeforeXMLToJSONTransform *** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="BeforeXMLToJSONTransform"/>
+        <set-variable variableName="HeaderId" value="" doc:name="Variable"/>
+        <async processingStrategy="Asynchronous_Processing_Strategy" doc:name="Async">
+            <flow-ref name="edi_process_details_Flow" doc:name="edi_process_details_Flow"/>
+        </async>
+        <dw:transform-message doc:name="ProcessHeaderInfo">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	EDI-180: {
+		BGN: {
+			BGN02: payload.EDI-180.BGN.BGN02,
+			BGN03: payload.EDI-180.BGN.BGN03,
+			BGN04: payload.EDI-180.BGN.BGN04,
+			DTM: {
+				DTM02: payload.EDI-180.BGN.DTM.DTM02
+			},
+			N9: payload.EDI-180.BGN.*N9 map ((BGNN9 , indexOfBGNN9) -> {
+				N902: BGNN9.N902 when BGNN9.N901 == 'ST' otherwise ' ',
+				N903: BGNN9.N903
+			}),
+			PER: {
+				PER01: payload.EDI-180.BGN.PER.PER01,
+				PER02: payload.EDI-180.BGN.PER.PER02,
+				PER06: payload.EDI-180.BGN.PER.PER06,
+				PER08: payload.EDI-180.BGN.PER.PER08
+				//PER09: payload.EDI-180.BGN.PER.PER09
+			},
+			SAC: {
+				SAC05: payload.EDI-180.BGN.SAC.SAC05
+			},
+			PartyIdentification: {
+				N1: {
+					N103: payload.EDI-180.BGN.PartyIdentification.N1.N103
+				}
+			}
+		}
+	}
+}
+]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="*** EDIRequest_AfterHeadersXMLToJSONTransform *** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="AfterXMLToJSONTransform"/>
+        <jms:outbound-endpoint queue="EDI-Processing-Target-Queue" connector-ref="Active_MQ" doc:name="PutHeaderDetailsInJMS"/>
+        <catch-exception-strategy doc:name="CatchAllExceptions_CES">
+            <logger message="***** ExceptionOccuredWhileProcessingHeaderInfo **** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="LogExceptionInfo"/>
+        </catch-exception-strategy>
+    </flow>
+    <flow name="edi_process_details_Flow">
+        <logger message="*** EDIRequest_ProcessDetails_SOF *** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="ProcessDetails_StartOfTheFlow"/>
+        <foreach doc:name="For Each">
+            <logger level="INFO" doc:name="Logger"/>
+        </foreach>
+        <logger message="*** EDIRequest_BeforeSettingVar *** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="BeforeSettingVar "/>
+        <set-variable variableName="skuName" value="#[xpath3('/BasicBaselineItemData/BLI/BLI02')]" doc:name="GetSKUValue"/>
+        <dw:transform-message doc:name="ProcessDetailInfo">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	//EDI-180: {
+	//	BGN: {
+				BasicBaselineItemData: payload.*BasicBaselineItemData map ((basicBaselineItemDatum , indexOfBasicBaselineItemDatum) ->{
+					BLI: {
+						BLI02: basicBaselineItemDatum.BLI.BLI02,
+						BLI03: basicBaselineItemDatum.BLI.BLI03,
+						BLI04: basicBaselineItemDatum.BLI.BLI04,
+						BLI05: basicBaselineItemDatum.BLI.BLI05,
+						BLI06: basicBaselineItemDatum.BLI.BLI06,
+						BLI09: basicBaselineItemDatum.BLI.BLI09 when basicBaselineItemDatum.BLI.BLI08 == 'VP' otherwise 'NotMatched'
+					},
+					(basicBaselineItemDatum.*N9 map ((n9 , indexOfN9) -> {
+						N9: {
+							N901: n9.N901,
+							N902: n9.N902 when n9.N901 == '25' or n9.N901 == 'L1' otherwise 'NotMatched'
+						}
+						
+					})),
+					PID: {
+							PID05: payload.BasicBaselineItemData.PID.PID05
+						},
+						RDR: {
+							RDR05: payload.BasicBaselineItemData.RDR.RDR05
+						},
+						CodeSourceInformation: {
+							LQ: {
+								LQ02: payload.BasicBaselineItemData.CodeSourceInformation.LQ.LQ02
+							}
+						}
+				}
+			)
+	//	}
+	//}
+
+}
+]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="*** EDIRequest_AfterDetailsXMLToJSONTransform *** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="AfterXMLToJSONTransform"/>
+        <jms:outbound-endpoint queue="EDI-Processing-Target-Queue" connector-ref="Active_MQ" doc:name="PutProcessDetailsInJMS"/>
+        <catch-exception-strategy doc:name="CatchAllExceptions_CES">
+            <logger message="***** ExceptionOccuredWhileProcessingBaseLineItemsInfo **** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="Copy_of_LogExceptionInfo"/>
+        </catch-exception-strategy>
+    </flow>
+</mule>
