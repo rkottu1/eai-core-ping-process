@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:jms="http://www.mulesoft.org/schema/mule/jms" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd">
+    <jms:activemq-connector name="Active_MQ" brokerURL="tcp://localhost:61616" validateConnections="true" numberOfConsumers="1" doc:name="Active MQ"/>
+    <flow name="edi-app-2Flow" processingStrategy="queued-asynchronous">
+        <jms:inbound-endpoint queue="EDI-Processing-Target-Queue" connector-ref="Active_MQ"  doc:name="JMS"/>
+        <logger message="***EDI request which is comming from ActiveMQ Before JSON to object transformer*** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="RequestBeforeJSONToObject"/>
+        <set-variable variableName="UUID" value=" #[java.util.UUID.randomUUID()]" doc:name="Variable"/>
+        <set-variable variableName="ThreadID" value="#[java.lang.Thread.currentThread().getId()]" doc:name="Variable"/>
+        <json:json-to-object-transformer doc:name="JSON to Object"/>
+        <dw:transform-message doc:name="CheckingForHeaderAndLine files">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+payload]]></dw:set-payload>
+            <dw:set-variable variableName="jsonData"><![CDATA[%dw 1.0
+%output application/json
+%var jsonData = payload
+---
+jsonData.EDI-180.ISA.ISA01?
+]]></dw:set-variable>
+            <dw:set-variable variableName="jsonDataHeader"><![CDATA[%dw 1.0
+%output application/json
+%var jsonDataHeader = payload
+---
+jsonDataHeader.EDI-180.BGN?
+]]></dw:set-variable>
+        </dw:transform-message>
+        <set-variable variableName="filename" value="#['']" doc:name="VariableForFileName"/>
+        <expression-component doc:name="SettingFileName"><![CDATA[if( flowVars.jsonData == 'true' ){
+     flowVars.put("filename", "LinesStoredProcedure");
+ } 
+ else if ( flowVars.jsonDataHeader == 'true' ){
+     flowVars.put("filename", "HeaderStoredProcedure");
+ } 
+else
+{
+ flowVars.put("description", "none");
+}
+
+]]></expression-component>
+        <logger message="**** FileName== #[flowVars.filename] ****UUID==#[flowVars.UUID]***threadID == #[flowVars.ThreadID]***payload AfterJSON transformation*** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="PayloadAfterJSONTransformation"/>
+        <file:outbound-endpoint path="F:\MULESOFT-DATA\Mule_Documents(all)\Sony-tasks\EDI-process-task\EDI-Output" responseTimeout="10000" doc:name="PutIntoFileLocation" outputPattern="#[flowVars.filename]_#[flowVars.UUID]_#[server.dateTime.format(&quot;yyyyMMddHHmmssSSS&quot;)].json"/>
+        <catch-exception-strategy doc:name="Catch Exception Strategy">
+            <logger message="*** exception **** #[message.payloadAs(java.lang.String)]" level="INFO" doc:name="ExceptionLog"/>
+        </catch-exception-strategy>
+    </flow>
+</mule>
